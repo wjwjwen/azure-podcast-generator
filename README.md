@@ -2,7 +2,8 @@
 - Add web link & Blibli Video content
 - Support multiple content input
 
-![Uploading Screenshot 2025-02-05 at 21.17.56.png…]()
+![Screenshot 2025-02-05 at 21 17 56](https://github.com/user-attachments/assets/2c3f3c78-2e3f-4e70-82b1-81a2eec1f4f9)
+
 
 # 🗣️ Azure Podcast Generator
 
