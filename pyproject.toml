@@ -12,6 +12,9 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "streamlit>=1.39.0",
     "tiktoken>=0.8.0",
+    "whisper>=1.1.10",
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.3",
 ]
 
 [tool.uv]

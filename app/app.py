@@ -2,19 +2,19 @@
 
 import logging
 import os
+from datetime import datetime
 
 import streamlit as st
-from const import AZURE_HD_VOICES, LOGGER
+from const import AZURE_HD_VOICES
 from dotenv import find_dotenv, load_dotenv
-from utils.cost import (
-    calculate_azure_ai_speech_costs,
-    calculate_azure_document_intelligence_costs,
-    calculate_azure_openai_costs,
-)
-from utils.document import DocumentResponse, document_to_markdown
 from utils.identity import check_claim_for_tenant
-from utils.llm import document_to_podcast_script, get_encoding
+from utils.llm import (
+    document_to_english_learning_podcast,
+    document_to_podcast_script,
+)
 from utils.speech import podcast_script_to_ssml, text_to_speech
+from utils.video_scraper import scrape_video
+from utils.web_scraper import scrape_webpage
 
 # optional: only allow specific tenants to access the app (using Azure Entra ID)
 headers = st.context.headers
@@ -31,179 +31,227 @@ if os.getenv("ENTRA_AUTHORIZED_TENANTS") and headers.get("X-Ms-Client-Principal"
 st.set_page_config(
     page_title="Azure Podcast Generator",
     page_icon="🗣️",
-    layout="centered",
+    layout="wide",
     initial_sidebar_state="auto",
     menu_items=None,
 )
-st.title("🗣️ Podcast Generator")
+st.title("AI Podcast Generator")
 
-
-st.write(
-    "Generate an engaging ~2 minute podcast based on your documents (e.g. scientific papers from arXiv) using Azure OpenAI and Azure Speech."
+# Custom CSS for the modal-like appearance
+st.markdown(
+    """
+    <style>
+    .source-container {
+        background-color: #1E1E1E;
+        border-radius: 10px;
+        padding: 30px;
+        margin: 20px 0;
+    }
+    .source-header {
+        color: white;
+        font-size: 24px;
+        margin-bottom: 20px;
+    }
+    .source-description {
+        color: #888;
+        margin-bottom: 30px;
+    }
+    .scrollable-text {
+        max-height: 200px;
+        overflow-y: scroll;    /* 垂直滚动条 */
+        overflow-x: hidden;    /* 隐藏水平滚动条 */
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        background-color: #f5f5f5;
+        word-wrap: break-word;
+        white-space: normal;
+    }
+    </style>
+""",
+    unsafe_allow_html=True,
 )
 
-st.info(
-    "Generative AI may produce inaccuracies in podcast scripts. Always review for inconsistencies before publishing.",
-    icon="ℹ️",
-)
+# Sources Container
+with st.container():
+    st.markdown('<div class="source-container">', unsafe_allow_html=True)
+    st.markdown('<div class="source-header">Add sources</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="source-description">Choose your content source to generate podcast.</div>',
+        unsafe_allow_html=True,
+    )
 
-final_audio = None
-form = st.empty()
-form_container = form.container()
+    # Main upload area
+    upload_col, link_col, video_col = st.columns(3)
 
-# Podcast title input
-podcast_title = form_container.text_input("Podcast Title", value="AI in Action")
+    with upload_col, st.form(key="document_form", clear_on_submit=True):
+        st.markdown("### 📄 Document Upload")
+        uploaded_file = st.file_uploader(
+            "Upload a document",
+            type=["txt", "pdf", "docx"],
+            help="Supported formats: TXT, PDF, DOCX",
+        )
+        doc_submit = st.form_submit_button("Upload")
 
-# File upload
-uploaded_file = form_container.file_uploader(
-    "Upload your document",
-    accept_multiple_files=False,
-    type=["pdf", "doc", "docx", "ppt", "pptx", "txt", "md"],
-)
+    with link_col, st.form(key="web_form", clear_on_submit=True):
+        st.markdown("### 🔗 Web Link")
+        url = st.text_input("Enter website URL")
+        web_submit = st.form_submit_button("Process")
 
-# Advanced options expander
-with form_container.expander("Advanced options", expanded=False):
+    with video_col, st.form(key="bilibili_form", clear_on_submit=True):
+        st.markdown("### 📺 Bilibili Video")
+        video_bvid = st.text_input(
+            "Enter BV ID",
+            placeholder="Example: BV1GJ411x7h7",
+            help="Enter the BV ID from the Bilibili video URL",
+        )
+        video_submit = st.form_submit_button("Process")
+
+    if video_submit and video_bvid:
+        try:
+            with st.spinner("Processing Bilibili video..."):
+                document_response = scrape_video(video_bvid)
+                st.success("Video content processed successfully!")
+
+                # 添加到源列表
+                source_item = {
+                    "type": "bilibili",
+                    "url": f"BV{video_bvid}",
+                    "content": document_response.markdown,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                st.session_state.source_list.append(source_item)
+
+        except Exception as e:
+            st.error(f"Error processing Bilibili video: {str(e)}")
+
+# 在文件开头添加
+if "source_list" not in st.session_state:
+    st.session_state.source_list = []
+
+# Process sources and show content
+if web_submit and url:
+    try:
+        with st.spinner("Processing webpage..."):
+            document_response = scrape_webpage(url)
+            st.success("Web content processed successfully!")
+
+            # 添加到源列表
+            source_item = {
+                "type": "web",
+                "url": url,
+                "content": document_response.markdown,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            st.session_state.source_list.append(source_item)
+
+    except Exception as e:
+        st.error(f"Error processing URL: {str(e)}")
+
+# 显示源列表
+if st.session_state.source_list:
+    st.markdown("### Source List")
+    for idx, source in enumerate(st.session_state.source_list):
+        with st.expander(
+            f"Source {idx + 1}: {source['type'].upper()} - {source['timestamp']}"
+        ):
+            st.markdown('<div class="scrollable-text">', unsafe_allow_html=True)
+            st.markdown(source["content"])
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            if st.button(f"Remove Source {idx + 1}", key=f"remove_{idx}"):
+                st.session_state.source_list.pop(idx)
+                st.rerun()
+
+    # 合并所有源的内容
+    combined_content = "\n\n".join(
+        [source["content"] for source in st.session_state.source_list]
+    )
+    st.session_state.input_content = combined_content
+
+    # 根据源列表长度动态调整token数量
+    base_tokens = 3000  # 基础token数调整为3000
+    tokens_per_source = 1000  # 每个额外源增加的token数
+    max_tokens = min(
+        base_tokens + (len(st.session_state.source_list) - 1) * tokens_per_source, 6000
+    )  # 上限调整为6000
+
+    # 添加播客模式选择
+    st.markdown("### Podcast Settings")
+    podcast_mode = st.radio(
+        "Select Podcast Mode",
+        ["Standard Podcast", "English Learning (JP/EN)"],
+        help="Choose between standard podcast or English learning format with Japanese explanations",
+    )
+
+    # 语音设置根据模式调整
+    st.markdown("### Voice Settings")
     col1, col2 = st.columns(2)
-
-    # Voice 1 select box
-    voice_1 = col1.selectbox(
-        "Voice 1",
-        options=list(AZURE_HD_VOICES.keys()),
-        index=list(AZURE_HD_VOICES.keys()).index("Andrew")
-        if "Andrew" in AZURE_HD_VOICES
-        else 0,
-    )
-
-    # Voice 2 select box
-    voice_2 = col2.selectbox(
-        "Voice 2",
-        options=list(AZURE_HD_VOICES.keys()),
-        index=list(AZURE_HD_VOICES.keys()).index("Emma")
-        if "Emma" in AZURE_HD_VOICES
-        else 1,
-    )
-
-    # Max tokens slider
-    max_tokens = st.slider(
-        "Max Tokens",
-        min_value=1000,
-        max_value=32000,
-        value=8000,
-        step=500,
-        help="Select the maximum number of tokens to be used for generating the podcast script. Adjust this according to your OpenAI quota.",
-    )
-# Submit button
-generate_podcast = form_container.button(
-    "Generate Podcast", type="primary", disabled=not uploaded_file
-)
-
-if uploaded_file and generate_podcast:
-    bytes_data = uploaded_file.read()
-    form.empty()
-
-    status_container = st.empty()
-    with status_container.status(
-        "Processing document with Azure Document Intelligence...", expanded=False
-    ) as status:
-        LOGGER.info(
-            f"Processing document: {uploaded_file.name}, type: {uploaded_file.type}"
-        )
-
-        # Convert PDF/image/Word files to Markdown with Document Intelligence
-        if uploaded_file.type in [
-            "application/pdf",
-            "image/png",
-            "image/jpeg",
-            "application/msword",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/vnd.ms-powerpoint",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        ]:
-            document_response = document_to_markdown(bytes_data)
+    with col1:
+        if podcast_mode == "Standard Podcast":
+            voice_1_label = "Select Voice 1 (Host)"
         else:
-            document_response = DocumentResponse(
-                markdown=bytes_data.decode("utf-8"), pages=0
-            )
+            voice_1_label = "Select Voice 1 (English Host)"
+        voice_1 = st.selectbox(voice_1_label, options=AZURE_HD_VOICES, index=0)
+    with col2:
+        if podcast_mode == "Standard Podcast":
+            voice_2_label = "Select Voice 2 (Co-host)"
+        else:
+            voice_2_label = "Select Voice 2 (Japanese Host)"
+        voice_2 = st.selectbox(voice_2_label, options=AZURE_HD_VOICES, index=1)
 
-        status.update(
-            label="Analyzing document and generating podcast script with Azure OpenAI...",
-            state="running",
-            expanded=False,
-        )
+    # 显示并允许调整token数量
+    max_tokens = st.slider(
+        "Max Length (tokens)",
+        min_value=1000,
+        max_value=6000,  # 上限调整为6000
+        value=max_tokens,
+        help=f"Suggested length based on {len(st.session_state.source_list)} sources. Base: 3000, +1000 per additional source",
+    )
 
-        num_tokens = len(get_encoding().encode(document_response.markdown))
-        LOGGER.info(f"Generating podcast script. Document tokens: {num_tokens}")
+    # Generate Podcast Button
+    st.divider()
+    if st.button("Generate Podcast", type="primary"):
+        with st.spinner("Generating podcast..."):
+            try:
+                if podcast_mode == "Standard Podcast":
+                    podcast_response = document_to_podcast_script(
+                        document=st.session_state.input_content,
+                        max_tokens=max_tokens,
+                        voice_1=voice_1,
+                        voice_2=voice_2,
+                    )
+                else:
+                    podcast_response = document_to_english_learning_podcast(
+                        document=st.session_state.input_content,
+                        max_tokens=max_tokens,
+                        voice_1=voice_1,
+                        voice_2=voice_2,
+                    )
 
-        # Convert input document to podcast script
-        podcast_response = document_to_podcast_script(
-            document=document_response.markdown,
-            title=podcast_title,
-            voice_1=voice_1,
-            voice_2=voice_2,
-            max_tokens=max_tokens,
-        )
+                # Create podcast data dictionary with explicit structure
+                podcast_data = {
+                    "script": podcast_response.podcast["script"],
+                    "voice_1": voice_1,
+                    "voice_2": voice_2,
+                    "config": podcast_response.podcast.get("config", {}),
+                }
 
-        podcast_script = podcast_response.podcast["script"]
-        for item in podcast_script:
-            st.markdown(f"**{item['name']}**: {item['message']}")
+                # Generate audio
+                ssml = podcast_script_to_ssml(podcast_data)
+                # st.write("Generated SSML:", ssml)  # Debug SSML output
 
-        status.update(
-            label="Generating podcast using Azure Speech (HD voices)...",
-            state="running",
-            expanded=False,
-        )
+                audio = text_to_speech(ssml)
 
-        # Convert podcast script to audio
-        ssml = podcast_script_to_ssml(podcast_response.podcast)
-        audio = text_to_speech(ssml)
+                # Display audio player
+                st.audio(audio, format="audio/wav")
 
-        status.update(
-            label="Calculate Azure costs...",
-            state="running",
-            expanded=False,
-        )
-
-        # Calculate costs
-        azure_document_intelligence_costs = calculate_azure_document_intelligence_costs(
-            pages=document_response.pages
-        )
-        azure_openai_costs = calculate_azure_openai_costs(
-            input_tokens=podcast_response.usage.prompt_tokens,
-            output_tokens=podcast_response.usage.completion_tokens,
-        )
-
-        azure_ai_speech_costs = calculate_azure_ai_speech_costs(
-            characters=sum(len(item["message"]) for item in podcast_script)
-        )
-
-        status.update(label="Finished", state="complete", expanded=False)
-        final_audio = True
-
-
-# Display audio player after generation
-if final_audio:
-    status_container.empty()
-
-    # Create three tabs
-    audio_tab, transcript_tab, costs_tab = st.tabs(["Audio", "Transcript", "Costs"])
-
-    with audio_tab:
-        st.audio(audio, format="audio/wav")
-
-    with transcript_tab:
-        podcast_script = podcast_response.podcast["script"]
-        for item in podcast_script:
-            st.markdown(f"**{item['name']}**: {item['message']}")
-
-    with costs_tab:
-        st.markdown(
-            f"**Azure: Document Intelligence**: ${azure_document_intelligence_costs:.2f}"
-        )
-        st.markdown(f"**Azure OpenAI Service**: ${azure_openai_costs:.2f}")
-        st.markdown(f"**Azure AI Speech**: ${azure_ai_speech_costs:.2f}")
-        st.markdown(
-            f"**Total costs**: ${(azure_ai_speech_costs + azure_openai_costs + azure_document_intelligence_costs):.2f}"
-        )
+                # Display script
+                with st.expander("View podcast script"):
+                    for item in podcast_response.podcast["script"]:
+                        st.markdown(f"**{item['name']}**: {item['message']}")
+            except Exception as e:
+                st.error(f"Error generating podcast: {str(e)}")
 
 # Footer
 st.divider()

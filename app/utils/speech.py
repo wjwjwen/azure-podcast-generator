@@ -55,24 +55,55 @@ def text_to_speech(ssml) -> bytes:
     raise Exception(f"Unknown exit reason: {result.reason}")
 
 
-def podcast_script_to_ssml(podcast) -> str:
-    """Convert podcast script to SSML."""
+def podcast_script_to_ssml(podcast_data: dict) -> str:
+    """Convert podcast script to SSML format."""
 
-    podcast_script = podcast["script"]
-    ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='https://www.w3.org/2001/mstts' xml:lang='en-US'>"
-
-    for line in podcast_script:
-        # Escape SSML special characters
-        message = (
-            line["message"]
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-            .replace("'", "&apos;")
+    def process_text(text: str) -> str:
+        """处理特殊标记和中文内容"""
+        # 处理笑声标记
+        text = text.replace(
+            "[laughter]",
+            '<break time="300ms"/> <say-as interpret-as="interjection">ha ha</say-as> <break time="200ms"/>',
         )
-        ssml += f"<voice name='{AZURE_HD_VOICES[line['name']]}'>{message}</voice>"
+        text = text.replace(
+            "[laughs]",
+            '<break time="300ms"/> <say-as interpret-as="interjection">ha ha</say-as> <break time="200ms"/>',
+        )
+        text = text.replace(
+            "[chuckles]",
+            '<break time="300ms"/> <say-as interpret-as="interjection">heh</say-as> <break time="200ms"/>',
+        )
+
+        # 处理中文内容
+        if "(CN)" in text:
+            text = text.replace("(CN)", "")
+            text = f'<lang xml:lang="zh-CN">{text}</lang>'
+
+        return text
+
+    # 获取完整的voice ID
+    voice_1 = AZURE_HD_VOICES[podcast_data["voice_1"]]
+    voice_2 = AZURE_HD_VOICES[podcast_data["voice_2"]]
+
+    # 动态创建说话者到voice的映射
+    speakers = list(set(item["name"] for item in podcast_data["script"]))
+    voice_mapping = {
+        speaker: voice_1 if i % 2 == 0 else voice_2
+        for i, speaker in enumerate(speakers)
+    }
+
+    ssml = """<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="en-US">\n"""
+
+    for item in podcast_data["script"]:
+        voice = voice_mapping[item["name"]]  # 使用说话者名字获取对应的voice
+        text = process_text(item["message"])
+
+        if "(CN)" in item["message"]:
+            # 中文部分
+            ssml += f"""<voice name="{voice}"><mstts:express-as style="chat"><prosody rate="0.95">{text}<break time="500ms"/></prosody></mstts:express-as></voice>\n"""
+        else:
+            # 英语部分
+            ssml += f"""<voice name="{voice}"><mstts:express-as style="chat">{text}<break time="500ms"/></mstts:express-as></voice>\n"""
 
     ssml += "</speak>"
-
     return ssml

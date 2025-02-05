@@ -1,3 +1,8 @@
+# Features added
+- Add web link & Blibli Video content
+- Support multiple content input
+
+
 # 🗣️ Azure Podcast Generator
 
 Generate an engaging podcast based on your document using Azure OpenAI Service and Azure AI Speech.
